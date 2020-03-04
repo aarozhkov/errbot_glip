@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 from time import sleep
+import os
 
 from errbot.backends.base import (ONLINE, Identifier, Message, Person, Room,
                                   RoomError, RoomOccupant)
@@ -234,10 +235,10 @@ class GlipBackend(ErrBot):
 
         identity = config.BOT_IDENTITY
 
-        self.client_id = identity.get('client_id', None)
-        self.client_secret = identity.get('client_secret', None)
-        self.server = identity.get('server', None)
-        self.bot_token = identity.get('bot_token', None)
+        self.client_id = os.environ.get('BOT_CLIENT_ID') or identity.get('client_id', None)
+        self.client_secret = os.environ.get('BOT_CLIENT_SECRET') or identity.get('client_secret', None)
+        self.server = os.environ.get('BOT_SERVER') or identity.get('server', None)
+        self.bot_token = os.environ.get('BOT_TOKEN') or identity.get('bot_token', None)
 
         self.rc_client = RestClient(self.client_id, self.client_secret,
                                     self.server)
