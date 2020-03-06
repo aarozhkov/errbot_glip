@@ -1,9 +1,10 @@
 import functools
 import json
 import logging
+import os
 import sys
 from time import sleep
-import os
+from typing import List
 
 from errbot.backends.base import (ONLINE, Identifier, Message, Person, Room,
                                   RoomError, RoomOccupant)
@@ -87,8 +88,9 @@ class GlipIdentifier(Identifier):
 
 
 class GlipPerson(GlipIdentifier, Person):
-    def __init__(self, info):
+    def __init__(self, info, chatid=None):
         super().__init__(info)
+        self._room = chatid
 
     @property
     def first_name(self):
@@ -126,6 +128,18 @@ class GlipPerson(GlipIdentifier, Person):
     @property
     def client(self):
         return None
+
+    @property
+    def chat(self):
+        '''
+            For each bot <-> person Direct message, Glip create separate
+            confersation ID.
+        '''
+        return self._room
+
+    @chat.setter
+    def chat(self, room):
+        self._room = room
 
     def aclattr(self):
         return self.id
@@ -192,28 +206,12 @@ class GlipRoom(GlipIdentifier, Room):
         raise RoomsNotSupportedError()
 
 
-# TODO: Glip have single entity for all tipe of conversation:
-# This entity have different type: Everyone, Team, Group, Direct, Personal
-# ErrBot have 2 entityes: Private and Room Chat
-# to mitigate this issue. There will be implemented Classes-workarounds
-
-
-class GlipDirectPerson(GlipPerson):
-    """
-        This is class with chat id
-    """
-
-    def __init__(self, info):
-        super().__init__(info)
-
-
 class GlipRoomOccupant(GlipPerson, RoomOccupant):
     """
     ErrBot:
-    This class represents a person inside a MUC.
-
+    This class represents a person inside a room.
     For Glip this class represents meesage creator inside chat with non-Direct
-    type
+    type: Everyone, Team, Group
     """
 
     def __init__(self, info, room):
@@ -235,10 +233,14 @@ class GlipBackend(ErrBot):
 
         identity = config.BOT_IDENTITY
 
-        self.client_id = os.environ.get('BOT_CLIENT_ID') or identity.get('client_id', None)
-        self.client_secret = os.environ.get('BOT_CLIENT_SECRET') or identity.get('client_secret', None)
-        self.server = os.environ.get('BOT_SERVER') or identity.get('server', None)
-        self.bot_token = os.environ.get('BOT_TOKEN') or identity.get('bot_token', None)
+        self.client_id = os.environ.get('BOT_CLIENT_ID') or identity.get(
+            'client_id', None)
+        self.client_secret = os.environ.get(
+            'BOT_CLIENT_SECRET') or identity.get('client_secret', None)
+        self.server = os.environ.get('BOT_SERVER') or identity.get(
+            'server', None)
+        self.bot_token = os.environ.get('BOT_TOKEN') or identity.get(
+            'bot_token', None)
 
         self.rc_client = RestClient(self.client_id, self.client_secret,
                                     self.server)
@@ -272,9 +274,8 @@ class GlipBackend(ErrBot):
             log.exception('Failed to load rc user info %s', str(e))
 
     # @lru_cache_ignoring_first_argument(128)
-    def glip_person(self, glip_user_id, room=None):
+    def glip_person(self, glip_user_id):
         '''
-            This method use API permission: GLipInternal
             Args: Ringcentral extension ID
 
             returns: glip user info
@@ -284,36 +285,9 @@ class GlipBackend(ErrBot):
                 '/restapi/v1.0/glip/persons/{id}'.format(
                     id=glip_user_id)).json()
             return glip_info
-        # return GlipPerson({
-        #     'id': glip_info['id'],
-        #     'email': glip_info['email'],
-        #     'lastName': glip_info['lastName'],
-        #     'firstName': glip_info['firstName']
-        # })
         except Exception as e:
             log.exception('Failed to load Glip user info %s', str(e))
-
-    # @lru_cache_ignoring_first_argument(128)
-    def glip_person_1(self, glip_user_id, room=None):
-        '''
-            This method use API permission: GLipInternal
-            Args: Ringcentral extension ID
-
-            returns: glip user info
-        '''
-        try:
-            glip_info = self.rc_client.get(
-                '/restapi/v1.0/glip/persons/{id}'.format(
-                    id=glip_user_id)).json()
-            return GlipRoomOccupant(
-                {
-                    'id': glip_info['id'],
-                    'email': glip_info['email'],
-                    'lastName': glip_info['lastName'],
-                    'firstName': glip_info['firstName']
-                }, room)
-        except Exception as e:
-            log.exception('Failed to load Glip user info %s', str(e))
+        return None
 
     # @lru_cache_ignoring_first_argument(128)
     def glip_person_lookup(self, search_string):
@@ -338,21 +312,11 @@ class GlipBackend(ErrBot):
         except Exception as e:
             log.exception('Failed to lookup Glip user info %s', str(e))
 
-    # @lru_cache_ignoring_first_argument(128)
-    def get_chat(self, _id):
-        try:
-            chat_info = self.rc_client.get('/restapi/v1.0/glip/chats/' +
-                                           _id).json()
-            log.debug(chat_info)
-            return GlipRoom(chat_info)
-        except Exception as e:
-            log.exception('Failed to load group %s', str(e))
-
     def create_conversation(self, person: Identifier) -> GlipRoom:
         '''
-            In case bot have to start Direct conversation with pesond from Grop
-            chat.
+            In case bot have to start Direct conversation with Person.
             Request Glip to create/find conversation with Given GlipPerson
+
         '''
         data = {'members': [{'id': person.id}]}
         try:
@@ -364,13 +328,37 @@ class GlipBackend(ErrBot):
                 'Failed to fetch private conversation chat with Person: {}'.
                 format(person.fullname))
 
+    def parse_mentions(self, mentions: List) -> List:
+        '''
+        Got text representation from Glip Message and return Object list:
+
+        :param mentions:
+            Glip post mentions array:
+                mentions: [
+                    {
+                        id: string - Internal identifier of user
+                        type: string Enum: Person, Team, File, Link, Event, Task, Note, Card
+                        name: Name of User
+                    }
+                ]
+
+        TODO: implement parser for all mention types.
+
+        :returns List of Identifiers:
+            Return GlipPerson for all metioned Ids
+        '''
+        result = list()
+        for item in mentions:
+            if item['type'] == 'Person' and not item['id'].startswith('glip-'):
+                # TODO handle glip only users.
+                result.append(self.build_identifier(item['id']))
+        log.debug(result)
+        return result
+
     def serve_once(self):
         log.info("Initializing connection")
-        s = None
 
         try:
-            # self.authorize()
-
             # TODO: dynamic events list
             events = ['/restapi/v1.0/glip/posts']
             self.pubnub = PubNub(self.rc_client, events, self._handle_message)
@@ -385,8 +373,7 @@ class GlipBackend(ErrBot):
 
         except KeyboardInterrupt:
             log.info("Interrupt received, shutting down")
-            if s:
-                s.revoke()
+            self.pibnub.revoke()
             return True
         except:
             log.exception("Error reading from Glip updates stream")
@@ -401,7 +388,6 @@ class GlipBackend(ErrBot):
 
     def _handle_message(self, message):
         try:
-            # RC SDK Subscribtion send raw message.
             post = json.loads(stripped(message))['body']
 
             # Subscribtion events not described. Can't find any other types. WE
@@ -409,34 +395,54 @@ class GlipBackend(ErrBot):
             if post['eventType'] != 'PostAdded':
                 return
 
-            room = self.get_chat(post['groupId'])
-            log.debug(room.is_direct)
+            room = self.query_room(post['groupId'])
+            '''
+            If Glip chat type is Direct. We must answer to same person in a same
+            room. Person_from = person_to.
+
+            If Glip chat type != Direct. We must answer this person in this room.
+            Person become RoomOccupant for bot. 
+            '''
             if room.is_direct:
-                sender = GlipPerson(self.glip_person(post['creatorId']))
-                to = GlipDirectPerson({'id': room.id})
+                person_from = GlipPerson(self.glip_person(post['creatorId']))
+                person_from.chat = room
+                person_to = person_from
             else:
-                sender = GlipRoomOccupant(self.glip_person(post['creatorId']),
-                                          room)
-                to = room
+                person_from = GlipRoomOccupant(
+                    self.glip_person(post['creatorId']), room)
+                person_to = room
 
-            message_instance = Message(body=post['text'], frm=sender, to=to)
-
+            message_instance = Message(body=post['text'],
+                                       frm=person_from,
+                                       to=person_to)
+            # If got list of mentions. It is not a command and we must handle it
+            # separatly.
+            # TODO implement ability to use Bot mention as command prefix in R
+            if post['mentions']:
+                mentions = self.parse_mentions(post['mentions'])
+                self.callback_mention(message_instance, mentions)
+            else:
+                self.callback_message(message_instance)
             # self.callback_room_joined(self)  # TODO Implement
-            self.callback_message(message_instance)
 
         except Exception as e:
             log.exception('Failed to handle message %s\n%s', str(e), message)
 
     @rate_limited(rate_limit)  # <---- Rate Limit
-    def send_message(self, mess):
-        super().send_message(mess)
+    def send_message(self, msg):
+        super().send_message(msg)
 
-        log.debug('Message: {frm}/{to}'.format(frm=mess.frm, to=mess.to))
-        sent_message = self.rc_client.post(
-            'restapi/v1.0/glip/chats/{chatid}/posts'.format(chatid=mess.to),
+        log.debug('Message: {frm}/{to}'.format(frm=msg.frm, to=msg.to))
+        if isinstance(msg.to, GlipPerson):
+            target = msg.to.chat
+        else:
+            target = msg.to.id
+        send_message = self.rc_client.post(
+            'restapi/v1.0/glip/chats/{chatid}/posts'.format(chatid=target),
             json={
-                'text': mess.body
+                'text': msg.body
             }).json()
+        log.debug(send_message)
 
     def send_reply(self, mess, text):
 
@@ -448,33 +454,47 @@ class GlipBackend(ErrBot):
 
     def build_identifier(self, txtrep):
         """
-        Convert a textual representation into a :class:`~GlipPerson` or :class:`~GlipRoom`.
+        Convert a textual(Glip ID) representation into a :class:`~GlipPerson` or :class:`~GlipRoom`.
+        Should 
+
+        :param txtrep:
+            Glip person ID
+
+        :returns:
+            GlipPerson without chat property
         """
         log.debug("building an identifier from %s" % txtrep)
-        return GlipPerson({'id': txtrep})  # Can also be Room
+        return GlipPerson(self.glip_person(txtrep))
 
     def build_reply(self, msg, text=None, private=False, threaded=False):
         # TODO: reply to private MUST BE refactored!
-        log.debug('TEST1: {}, {}'.format(msg.frm.id, msg.to.id))
         response = self.build_message(text)
         if private:
+            # TODO implement ability to use Bot mention as command prefix in R
             reply_to = self.create_conversation(msg.frm)
         else:
             reply_to = msg.to
         response.frm = self.bot_identifier
         response.to = reply_to
-        log.debug('TEST1: {}, {}'.format(response.frm.id, response.to.id))
         return response
 
     @property
     def mode(self):
         return 'Glip'
 
-    def query_room(self, room):
+    def query_room(self, room: str) -> GlipRoom:
         """
-        :raises: :class:`~RoomsNotSupportedError`
+        Get Glip chat info by Chat id:
+        :params room:
+            Glip chat ID
         """
-        raise RoomsNotSupportedError()
+        try:
+            chat_info = self.rc_client.get('/restapi/v1.0/glip/chats/' +
+                                           room).json()
+            log.debug(chat_info)
+            return GlipRoom(chat_info)
+        except Exception as e:
+            log.exception('Failed to load group %s', str(e))
 
     def rooms(self):
         """
