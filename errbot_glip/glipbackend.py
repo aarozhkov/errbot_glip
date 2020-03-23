@@ -9,6 +9,7 @@ from errbot.backends.base import (ONLINE, Identifier, Message, Person, Room,
                                   RoomError, RoomOccupant)
 from errbot.core import ErrBot
 from errbot.utils import rate_limited
+
 from rc_python import PubNub, RestClient
 
 # TODO: Some times we got RC api erros. And fill Identifiers with None.
@@ -143,6 +144,7 @@ class GlipPerson(GlipIdentifier, Person):
     def chat(self, room):
         self._room = room
 
+    @property
     def aclattr(self):
         return self.id
 
@@ -252,18 +254,17 @@ class GlipBackend(ErrBot):
 
         identity = config.BOT_IDENTITY
 
-        self.client_id = os.environ.get('BOT_CLIENT_ID') or identity.get(
-            'client_id', None)
+        self.client_id = os.environ.get(
+            'BOT_CLIENT_ID') or identity['client_id']
         self.client_secret = os.environ.get(
-            'BOT_CLIENT_SECRET') or identity.get('client_secret', None)
-        self.server = os.environ.get('BOT_SERVER') or identity.get(
-            'server', None)
-        self.bot_token = os.environ.get('BOT_TOKEN') or identity.get(
-            'bot_token', None)
+            'BOT_CLIENT_SECRET') or identity['client_secret']
+        self.server = os.environ.get('BOT_SERVER') or identity['server']
+        self.bot_token = os.environ.get('BOT_TOKEN') or identity['bot_token']
 
         self.rc_client = RestClient(self.client_id, self.client_secret,
                                     self.server)
-        # self.rc_client.debug = True
+        # log.debug(self.client_id, self.server, self.bot_token)
+        self.rc_client.debug = True
         if self.bot_token:
             self.rc_client.token = dict(access_token=self.bot_token)
         self.bot_identifier = self.bot_identity()  # Will be set in serve_once
