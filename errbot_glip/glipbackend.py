@@ -9,7 +9,6 @@ from errbot.backends.base import (ONLINE, Identifier, Message, Person, Room,
                                   RoomError, RoomOccupant)
 from errbot.core import ErrBot
 from errbot.utils import rate_limited
-
 from rc_python import PubNub, RestClient
 
 # TODO: Some times we got RC api erros. And fill Identifiers with None.
@@ -252,6 +251,7 @@ class GlipBackend(ErrBot):
         config.MESSAGE_SIZE_LIMIT = MESSAGE_SIZE_LIMIT
         logging.getLogger('Glip.bot').addFilter(GlipBotFilter())
 
+        # TODO: this line cause errbot config manadatory set BOT_IDENTITY
         identity = config.BOT_IDENTITY
 
         self.client_id = os.environ.get(
@@ -345,8 +345,8 @@ class GlipBackend(ErrBot):
             return GlipRoom(chat_info)
         except Exception as e:
             log.exception(
-                'Failed to fetch private conversation chat with Person: {}'.
-                format(person.fullname))
+                'Failed to fetch private conversation chat with Person: %s',
+                person.fullname)
 
     def parse_mentions(self, mentions: List) -> List:
         '''
